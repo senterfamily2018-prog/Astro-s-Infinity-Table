@@ -1,0 +1,285 @@
+==============================================================
+ ASTRO'S INFINITY TABLET - Gorilla Tag (Steam) Mod Menu Guide
+==============================================================
+Features covered:
+  1. Menu renamed to "Astro's Infinity Tablet" (purple glow shader)
+  2. Spotify button -> palm GUI (logo, song title, play/pause)
+  3. Mod Checker button -> purple ray on side grip -> player info
+  4. Player info: name, platform, join info, cosmetics preview
+  5. Report button -> board with Cheating / Toxicity / Hate Speech / Cancel
+
+NOTE: Use mods only in modded/private lobbies. Mods on public lobbies
+can break Gorilla Tag's Terms of Service and get you banned. This guide
+is a UI/utility menu only and has no cheat features (no speed boost,
+fly, etc.).
+
+--------------------------------------------------------------
+PART 1 - TOOLS YOU NEED
+--------------------------------------------------------------
+- Gorilla Tag (Steam) installed
+- Visual Studio 2022 (".NET desktop development" workload)
+- BepInEx 5 (x64, Mono) -> extract into the Gorilla Tag folder, run the
+  game once so it generates the BepInEx/ folders
+- Unity Editor (match Gorilla Tag's Unity version; check
+  Gorilla Tag_Data/globalgamemanagers or the game's Properties)
+- dnSpy (to inspect Assembly-CSharp.dll for class/field names)
+- A PNG of the Spotify logo (follow Spotify's brand guidelines)
+
+--------------------------------------------------------------
+PART 2 - CREATE THE PLUGIN PROJECT
+--------------------------------------------------------------
+1. Visual Studio -> New Project -> "Class Library (.NET Framework)"
+   Name: AstrosInfinityTablet, Target: .NET Framework 4.7.2
+2. Add References (Browse) from:
+   Gorilla Tag/BepInEx/core/        -> BepInEx.dll, 0Harmony.dll
+   Gorilla Tag/Gorilla Tag_Data/Managed/ ->
+       Assembly-CSharp.dll, UnityEngine.dll, UnityEngine.CoreModule.dll,
+       UnityEngine.UI.dll, UnityEngine.UIModule.dll, UnityEngine.IMGUIModule.dll,
+       UnityEngine.PhysicsModule.dll, UnityEngine.AssetBundleModule.dll,
+       UnityEngine.TextRenderingModule.dll, Unity.TextMeshPro.dll,
+       Photon3Unity3D.dll, PhotonUnityNetworking.dll, PhotonRealtime.dll
+3. Base plugin file (Plugin.cs):
+
+   using BepInEx;
+   using UnityEngine;
+
+   [BepInPlugin("astro.infinitytablet", "Astro's Infinity Tablet", "1.0.0")]
+   public class Plugin : BaseUnityPlugin
+   {
+       void Start()
+       {
+           GorillaTagger.OnPlayerSpawned(() =>
+           {
+               new GameObject("AstroTablet").AddComponent<TabletMenu>();
+           });
+       }
+   }
+
+4. Build -> copy AstrosInfinityTablet.dll to Gorilla Tag/BepInEx/plugins/
+
+--------------------------------------------------------------
+PART 3 - THE MENU (NAME + SHADER LOOK)
+--------------------------------------------------------------
+Shader (glowing purple border like your screenshot):
+1. In Unity, create a project, make a Shader Graph / simple unlit shader:
+   Properties: _Color (purple 0.6,0.2,1), _Glow (float 2)
+   Output: _Color * _Glow, with alpha for rounded panel.
+   (Use "Unlit/Transparent" built-in render pipeline - Gorilla Tag uses
+   the built-in pipeline, so URP-only graphs will NOT work.)
+2. Put the shader + a rounded-panel material + a Spotify logo sprite in a
+   folder, then Assets -> Build AssetBundle (name it "astrotablet").
+   Build with the SAME Unity version as the game.
+3. Embed the bundle in your project: Properties -> Resources -> Add
+   "astrotablet" file. Set Build Action = Embedded Resource.
+4. Load it in code:
+
+   var stream = Assembly.GetExecutingAssembly()
+       .GetManifestResourceStream("AstrosInfinityTablet.astrotablet");
+   var bundle = AssetBundle.LoadFromStream(stream);
+   Material glowMat = bundle.LoadAsset<Material>("PurpleGlow");
+   Sprite spotifyLogo = bundle.LoadAsset<Sprite>("SpotifyLogo");
+
+Menu title (this is the rename):
+
+   const string MenuTitle = "Astro's Infinity Tablet";
+
+Build the tablet as a world-space Canvas parented to your LEFT hand:
+   GorillaTagger.Instance.leftHandTransform
+Toggle it with the left-hand primary button (X):
+   ControllerInputPoller.instance.leftControllerPrimaryButton
+
+Layout (matches your screenshot style): title at top, then a vertical
+list of buttons: [Spotify] [Mod Checker] [Report] [Disconnect]
+Use TextMeshPro for labels and a BoxCollider on each button.
+Press detection: attach a small trigger sphere to your right index
+finger and call button.OnPress() when it enters the button collider
+(add a ~0.25 s cooldown so it doesn't double-fire).
+
+--------------------------------------------------------------
+PART 4 - SPOTIFY BUTTON (PALM GUI)
+--------------------------------------------------------------
+Behavior: pressing "Spotify" spawns a small panel above your palm with
+the logo, the song title, and Play/Pause.
+
+Easiest approach that works on Steam (PC): read the Spotify desktop
+app's window title and send the Windows media keys.
+
+  using System.Diagnostics;
+  using System.Runtime.InteropServices;
+
+  [DllImport("user32.dll")]
+  static extern void keybd_event(byte vk, byte scan, uint flags, int extra);
+  const byte VK_MEDIA_PLAY_PAUSE = 0xB3;
+  const byte VK_MEDIA_NEXT_TRACK = 0xB0;
+  const byte VK_MEDIA_PREV_TRACK = 0xB1;
+
+  static void PressKey(byte vk)
+  {
+      keybd_event(vk, 0, 0, 0);
+      keybd_event(vk, 0, 2, 0); // key up
+  }
+
+  static string GetSongTitle()
+  {
+      foreach (var p in Process.GetProcessesByName("Spotify"))
+          if (!string.IsNullOrEmpty(p.MainWindowTitle))
+          {
+              var t = p.MainWindowTitle;
+              // When paused the title is just "Spotify Free/Premium"
+              if (t.StartsWith("Spotify")) return "Paused";
+              return t; // "Artist - Song"
+          }
+      return "Spotify not running";
+  }
+
+Palm GUI steps:
+1. Create a world-space Canvas (0.15 x 0.08 m) as a child of
+   leftHandTransform, offset ~ (0, 0.08, 0.05) so it floats over the palm
+   and rotate it to face your eyes.
+2. Add: Image (Spotify logo), TextMeshPro (song title), two buttons
+   (Play/Pause, optional Next).
+3. On Spotify button press -> panel.SetActive(true).
+4. In Update(), every ~1 second set titleText.text = GetSongTitle().
+5. Play/Pause button -> PressKey(VK_MEDIA_PLAY_PAUSE).
+6. Play/Pause icon: swap sprites depending on whether the title is
+   "Paused".
+Tip: Spotify must be open on the same PC. Quest players cannot use this
+(it's a Windows-only feature).
+
+--------------------------------------------------------------
+PART 5 - MOD CHECKER (SIDE GRIP RAY)
+--------------------------------------------------------------
+Behavior: press "Mod Checker" -> while holding side grip, a purple ray
+shoots from your hand -> point at a player -> their info shows on the
+tablet.
+
+1. Create the ray with a LineRenderer (purple material, width 0.01).
+2. In Update(), when checker mode is on:
+
+   bool grip = ControllerInputPoller.instance.rightControllerGripFloat > 0.5f;
+   line.enabled = grip;
+   if (grip)
+   {
+       Transform hand = GorillaTagger.Instance.rightHandTransform;
+       Ray r = new Ray(hand.position, hand.forward);
+       Vector3 end = hand.position + hand.forward * 30f;
+       VRRig hit = null;
+       foreach (var rig in GorillaParent.instance.vrrigs)
+       {
+           if (rig.isOfflineVRRig) continue;
+           // distance from ray to rig head
+           Vector3 p = rig.headMesh.transform.position;
+           float t = Vector3.Dot(p - r.origin, r.direction);
+           if (t > 0 && Vector3.Distance(r.origin + r.direction * t, p) < 0.4f)
+           { hit = rig; end = p; break; }
+       }
+       line.SetPosition(0, hand.position);
+       line.SetPosition(1, end);
+       if (hit != null) selectedRig = hit;
+   }
+
+(Class and field names can change between game updates; verify them
+in dnSpy under Assembly-CSharp.dll -> VRRig and GorillaParent.)
+
+--------------------------------------------------------------
+PART 6 - PLAYER INFO PANEL
+--------------------------------------------------------------
+Show these when selectedRig is set:
+
+NAME:
+   selectedRig.OwningNetPlayer.NickName
+
+PLATFORM (Steam vs Meta Quest):
+   Gorilla Tag does not send an explicit "platform" field. The common
+   heuristic used by community mods is checking the player's cosmetics
+   string for the Steam "first login" cosmetic markers:
+
+   string c = selectedRig.concatStringOfCosmeticsAllowed;
+   string platform = c.Contains("FIRST LOGIN") ? "Steam" : "Meta Quest";
+
+   This is a best guess, not 100% accurate, so label it
+   "Platform (estimated)" in your UI. Re-check the marker string in dnSpy
+   after each game update.
+
+JOIN DATE (when they joined Gorilla Tag):
+   IMPORTANT: other players' account creation dates are NOT exposed to
+   the client. Your mod cannot read them. Options:
+   - Show "Account age: Hidden" (honest default), or
+   - Show "Seen in lobby since: HH:MM" using a timestamp you record when
+     the rig first appears (Dictionary<string, DateTime>), or
+   - Show the cosmetic-based hint (e.g. "Has FIRST LOGIN cosmetic" =
+     early player).
+
+COSMETICS GUI (their gorilla + what they wear):
+1. Make a second Camera (disabled) with a RenderTexture (256x256).
+2. Position it ~1.2 m in front of the selected rig's head, facing it:
+   cam.transform.position = rig.headMesh.transform.position
+                            + rig.headMesh.transform.forward * 1.2f;
+   cam.transform.LookAt(rig.headMesh.transform.position);
+3. cam.targetTexture = renderTex; cam.Render() each 0.2 s.
+4. Put renderTex on a RawImage on the tablet. This shows their live
+   gorilla with the cosmetics they're wearing.
+5. Under it, list item names by splitting
+   rig.concatStringOfCosmeticsAllowed on "." or ","
+   and filtering to the items currently worn
+   (rig.cosmeticSet.items in newer versions).
+
+--------------------------------------------------------------
+PART 7 - REPORT BUTTON + BOARD
+--------------------------------------------------------------
+Behavior: pressing "Report" hides the main buttons and shows a report
+board with 4 buttons:
+
+   [ Cheating ]  [ Toxicity ]  [ Hate Speech ]  [ Cancel ]
+
+Code outline:
+
+   enum Screen { Main, Report }
+   Screen screen = Screen.Main;
+
+   void ShowMain()   { mainPanel.SetActive(true);  reportPanel.SetActive(false); }
+   void ShowReport() { mainPanel.SetActive(false); reportPanel.SetActive(true);  }
+
+   // Report button on main panel
+   reportButton.OnPress = () => ShowReport();
+
+   // Report board buttons
+   cheatingBtn.OnPress  = () => Submit("Cheating");
+   toxicityBtn.OnPress  = () => Submit("Toxicity");
+   hateBtn.OnPress      = () => Submit("Hate Speech");
+   cancelBtn.OnPress    = () => ShowMain();   // back to main menu
+
+   void Submit(string reason)
+   {
+       if (selectedRig == null) { ShowMain(); return; }
+       // Use the game's own report system rather than inventing one.
+       // In dnSpy, look at GorillaPlayerScoreboardLine / GorillaReportButton
+       // and call the same report method with the player's NetPlayer
+       // and the matching reason (e.g. HATE_SPEECH, TOXICITY, CHEATING).
+       // Then show "Report sent" for 2 seconds and call ShowMain().
+   }
+
+Reports only reach Another Axiom if you go through the game's real
+report function. A mod can't create its own moderation channel.
+
+--------------------------------------------------------------
+PART 8 - TESTING CHECKLIST
+--------------------------------------------------------------
+[ ] Game launches and BepInEx console shows "Astro's Infinity Tablet"
+[ ] Tablet toggles on left hand with X
+[ ] Spotify panel appears over palm, title updates, play/pause works
+[ ] Mod Checker: grip makes the purple ray; pointing at a player
+    updates name/platform/cosmetics
+[ ] Report -> board shows 4 options; Cancel returns to main menu
+[ ] Nothing breaks when the target player leaves (null-check selectedRig)
+
+--------------------------------------------------------------
+TROUBLESHOOTING
+--------------------------------------------------------------
+- Shader pink in game: bundle built with wrong Unity version or
+  pipeline; rebuild with the game's Unity version, built-in pipeline.
+- Class/field not found: names change each update; re-check in dnSpy.
+- Buttons double-press: add a cooldown timer.
+- Spotify title blank: open the desktop Spotify app (not the web player)
+  and keep its window not minimized to tray.
+==============================================================
